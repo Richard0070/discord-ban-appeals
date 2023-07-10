@@ -4,6 +4,9 @@ import { API_ENDPOINT, MAX_EMBED_FIELD_CHARS, MAX_EMBED_FOOTER_CHARS } from "./h
 import { createJwt, decodeJwt } from "./helpers/jwt-helpers.js";
 import { getBan, isBlocked } from "./helpers/user-helpers.js";
 
+// Store user submissions in memory
+const userSubmissions = {};
+
 export async function handler(event, context) {
     let payload;
 
@@ -25,11 +28,12 @@ export async function handler(event, context) {
         };
     }
 
-    if (payload.banReason !== undefined &&
+    if (
+        payload.banReason !== undefined &&
         payload.appealText !== undefined &&
-        payload.futureActions !== undefined && 
-        payload.token !== undefined) {
-        
+        payload.futureActions !== undefined &&
+        payload.token !== undefined
+    ) {
         const userInfo = decodeJwt(payload.token);
         if (isBlocked(userInfo.id)) {
             return {
@@ -39,7 +43,17 @@ export async function handler(event, context) {
                 },
             };
         }
-        
+
+        // Check if user already submitted an appeal today
+        if (userSubmissions[userInfo.id] && isWithin24Hours(userSubmissions[userInfo.id].timestamp)) {
+            return {
+                statusCode: 303,
+                headers: {
+                    "Location": `/error?msg=${encodeURIComponent("You can only submit one ban appeal per day.")}`,
+                },
+            };
+        }
+
         const message = {
             embed: {
                 title: "New appeal submitted!",
@@ -63,7 +77,7 @@ export async function handler(event, context) {
                     }
                 ]
             }
-        }
+        };
 
         if (process.env.GUILD_ID) {
             try {
@@ -82,16 +96,20 @@ export async function handler(event, context) {
                 const unbanInfo = {
                     userId: userInfo.id
                 };
-    
-                message.components = [{
-                    type: 1,
-                    components: [{
-                        type: 2,
-                        style: 5,
-                        label: "Approve appeal and unban user",
-                        url: `${unbanUrl.toString()}?token=${encodeURIComponent(createJwt(unbanInfo))}`
-                    }]
-                }];
+
+                message.components = [
+                    {
+                        type: 1,
+                        components: [
+                            {
+                                type: 2,
+                                style: 5,
+                                label: "Approve appeal and unban user",
+                                url: `${unbanUrl.toString()}?token=${encodeURIComponent(createJwt(unbanInfo))}`
+                            }
+                        ]
+                    }
+                ];
             }
         }
 
@@ -105,6 +123,11 @@ export async function handler(event, context) {
         });
 
         if (result.ok) {
+            // Store the submission timestamp
+            userSubmissions[userInfo.id] = {
+                timestamp: new Date().getTime()
+            };
+
             if (process.env.USE_NETLIFY_FORMS) {
                 return {
                     statusCode: 200
@@ -126,4 +149,12 @@ export async function handler(event, context) {
     return {
         statusCode: 400
     };
+}
+
+// Helper function to check if a timestamp is within the last 24 hours
+function isWithin24Hours(timestamp) {
+    const now = new Date().getTime();
+    const difference = now - timestamp;
+    const hoursDifference = difference / (1000 * 60 * 60);
+    return hoursDifference <= 24;
 }
